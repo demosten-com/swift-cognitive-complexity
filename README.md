@@ -89,4 +89,4 @@ Use `--violations-only` to show only functions that exceed the warning or error 
 
 ## License
 
-MIT
+[MIT](LICENSE)
