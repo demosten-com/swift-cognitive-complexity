@@ -1,0 +1,19 @@
+thresholds:
+  warning: 10
+  error: 20
+
+swiftui_aware: true
+
+swiftui_containers:
+  - VStack
+  - HStack
+  - ZStack
+
+exclude_paths:
+  - "**/Generated/**"
+  - "**/*.generated.swift"
+
+include_paths:
+  - "Sources/**"
+
+scan_spm_packages: false

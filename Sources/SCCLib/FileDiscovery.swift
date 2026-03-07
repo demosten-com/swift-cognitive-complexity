@@ -1,0 +1,182 @@
+import Foundation
+
+#if canImport(Darwin)
+import Darwin
+#elseif canImport(Glibc)
+import Glibc
+#elseif canImport(Musl)
+import Musl
+#endif
+
+public struct FileDiscovery: Sendable {
+    public let includePaths: [String]
+    public let excludePaths: [String]
+
+    private static let alwaysExcluded = [".build/", "DerivedData/", ".swiftpm/"]
+
+    public init(includePaths: [String] = [], excludePaths: [String] = []) {
+        self.includePaths = includePaths
+        self.excludePaths = excludePaths
+    }
+
+    public func discoverFiles(in roots: [String]) throws -> [String] {
+        let fm = FileManager.default
+        var result: [String] = []
+
+        for root in roots {
+            let absoluteRoot = root.hasPrefix("/") ? root : fm.currentDirectoryPath + "/" + root
+            let normalized = (absoluteRoot as NSString).standardizingPath
+
+            var isDir: ObjCBool = false
+            guard fm.fileExists(atPath: normalized, isDirectory: &isDir) else {
+                throw FileDiscoveryError.pathNotFound(root)
+            }
+
+            if !isDir.boolValue {
+                if normalized.hasSuffix(".swift") && shouldInclude(path: normalized) {
+                    result.append(normalized)
+                }
+                continue
+            }
+
+            guard let enumerator = fm.enumerator(atPath: normalized) else {
+                throw FileDiscoveryError.cannotEnumerate(root)
+            }
+
+            while let relativePath = enumerator.nextObject() as? String {
+                let fullPath = normalized + "/" + relativePath
+
+                // Skip always-excluded directories early
+                if Self.alwaysExcluded.contains(where: { relativePath.contains($0) }) {
+                    continue
+                }
+
+                guard relativePath.hasSuffix(".swift") else { continue }
+                guard shouldInclude(path: relativePath) else { continue }
+
+                result.append(fullPath)
+            }
+        }
+
+        return result.sorted()
+    }
+
+    public func shouldInclude(path: String) -> Bool {
+        // Check excludes
+        for pattern in excludePaths {
+            if Self.matchesGlob(path: path, pattern: pattern) {
+                return false
+            }
+        }
+
+        // Check includes (empty means include all)
+        if !includePaths.isEmpty {
+            let matched = includePaths.contains { Self.matchesGlob(path: path, pattern: $0) }
+            if !matched { return false }
+        }
+
+        return true
+    }
+
+    public static func matchesGlob(path: String, pattern: String) -> Bool {
+        if pattern.contains("**") {
+            return matchesDoubleStarPattern(path: path, pattern: pattern)
+        }
+        return fnmatch(pattern, path, FNM_PATHNAME) == 0
+    }
+
+    /// Handles `**` glob patterns by matching zero or more directory segments.
+    /// Splits the pattern at each `**`, then verifies each segment matches
+    /// in order within the path, with `**` consuming zero or more path components.
+    private static func matchesDoubleStarPattern(path: String, pattern: String) -> Bool {
+        let segments = pattern.components(separatedBy: "**")
+
+        // Build a regex-like match: each segment must appear in order,
+        // with ** allowing any number of path components between them.
+        // We use fnmatch per-segment against substrings of the path.
+
+        let pathComponents = path.split(separator: "/", omittingEmptySubsequences: true).map(String.init)
+
+        // Clean segments: remove leading/trailing slashes from each segment
+        let cleanedSegments = segments.map { seg -> String in
+            var s = seg
+            if s.hasPrefix("/") { s = String(s.dropFirst()) }
+            if s.hasSuffix("/") { s = String(s.dropLast()) }
+            return s
+        }
+
+        return matchSegments(cleanedSegments, against: pathComponents, segIndex: 0, pathIndex: 0)
+    }
+
+    private static func matchSegments(_ segments: [String], against pathComponents: [String], segIndex: Int, pathIndex: Int) -> Bool {
+        if segIndex >= segments.count {
+            return true
+        }
+
+        let segment = segments[segIndex]
+
+        // Empty segment means ** was at start/end or adjacent to another **
+        if segment.isEmpty {
+            // Skip this segment, ** matches zero or more components
+            return matchSegments(segments, against: pathComponents, segIndex: segIndex + 1, pathIndex: pathIndex)
+        }
+
+        // The segment may contain multiple path components (e.g., "a/b" from "a/**/b/c")
+        let segParts = segment.split(separator: "/", omittingEmptySubsequences: true).map(String.init)
+
+        // Try matching segParts starting at each possible pathIndex
+        let isLast = segIndex == segments.count - 1
+        let maxStart = pathComponents.count - segParts.count
+
+        for start in pathIndex...max(pathIndex, maxStart) {
+            if start + segParts.count > pathComponents.count { break }
+
+            var allMatch = true
+            for (i, segPart) in segParts.enumerated() {
+                if fnmatch(segPart, pathComponents[start + i], 0) != 0 {
+                    allMatch = false
+                    break
+                }
+            }
+
+            if allMatch {
+                let nextPathIndex = start + segParts.count
+                if isLast {
+                    // Last segment: if pattern ended with /**, any remaining path is ok
+                    // If not, all path components must be consumed
+                    if segIndex == segments.count - 1 && segments.last == "" {
+                        return true
+                    }
+                    // Check if there are more segments (empty trailing from **)
+                    if nextPathIndex == pathComponents.count {
+                        return true
+                    }
+                    // There might be a trailing empty segment
+                    if segIndex + 1 < segments.count {
+                        return matchSegments(segments, against: pathComponents, segIndex: segIndex + 1, pathIndex: nextPathIndex)
+                    }
+                } else {
+                    if matchSegments(segments, against: pathComponents, segIndex: segIndex + 1, pathIndex: nextPathIndex) {
+                        return true
+                    }
+                }
+            }
+        }
+
+        return false
+    }
+}
+
+public enum FileDiscoveryError: Error, CustomStringConvertible {
+    case pathNotFound(String)
+    case cannotEnumerate(String)
+
+    public var description: String {
+        switch self {
+        case .pathNotFound(let path):
+            return "Path not found: \(path)"
+        case .cannotEnumerate(let path):
+            return "Cannot enumerate directory: \(path)"
+        }
+    }
+}
