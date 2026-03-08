@@ -68,7 +68,7 @@ public struct Configuration: Sendable, Equatable {
         do {
             return try load(from: path)
         } catch {
-            fputs("Warning: Failed to parse config file '\(path)': \(error). Using defaults.\n", stderr)
+            FileHandle.standardError.write(Data("Warning: Failed to parse config file '\(path)': \(error). Using defaults.\n".utf8))
             return .default
         }
     }
@@ -93,83 +93,95 @@ public struct Configuration: Sendable, Equatable {
 
     // MARK: - YAML Parser
 
-    static func parse(yaml content: String) throws -> Configuration {
-        var config = Configuration.default
-        let lines = content.components(separatedBy: .newlines)
-
+    private struct YAMLParserState {
         var currentSection: String? = nil
         var currentList: [String]? = nil
         var currentListKey: String? = nil
 
-        func flushList() {
+        mutating func flushList(to config: inout Configuration) {
             if let key = currentListKey, let list = currentList {
                 applyList(key: key, list: list, to: &config)
             }
             currentList = nil
             currentListKey = nil
         }
+    }
 
-        for rawLine in lines {
+    static func parse(yaml content: String) throws -> Configuration {
+        var config = Configuration.default
+        var state = YAMLParserState()
+
+        for rawLine in content.components(separatedBy: .newlines) {
             let commentFree = stripComment(rawLine)
             let trimmed = commentFree.trimmingCharacters(in: .whitespaces)
             if trimmed.isEmpty { continue }
 
             let indent = commentFree.prefix(while: { $0 == " " }).count
-
-            // List item
-            if trimmed.hasPrefix("- ") {
-                let value = String(trimmed.dropFirst(2)).trimmingCharacters(in: .whitespaces)
-                    .trimmingCharacters(in: CharacterSet(charactersIn: "\"'"))
-                if currentList != nil {
-                    currentList?.append(value)
-                }
-                continue
-            }
-
-            // Key-value or section header
-            guard let colonIndex = trimmed.firstIndex(of: ":") else { continue }
-            let key = String(trimmed[..<colonIndex]).trimmingCharacters(in: .whitespaces)
-            let valueStr = String(trimmed[trimmed.index(after: colonIndex)...]).trimmingCharacters(in: .whitespaces)
-
-            // If there's a pending list, flush it
-            if indent == 0 || (indent > 0 && !valueStr.isEmpty) {
-                flushList()
-            }
-
-            if valueStr.isEmpty {
-                // Section header or list start
-                if indent == 0 {
-                    currentSection = key
-                    // Some top-level keys start a list
-                    if ["exclude_paths", "include_paths", "swiftui_containers", "spm_package_paths"].contains(key) {
-                        currentList = []
-                        currentListKey = key
-                        currentSection = nil
-                    }
-                } else if currentSection == "thresholds" {
-                    // Shouldn't happen for thresholds, but handle gracefully
-                } else {
-                    // Nested list under a section
-                    currentList = []
-                    currentListKey = key
-                }
-            } else {
-                // Scalar value
-                if indent == 0 {
-                    applyScalar(key: key, value: valueStr, to: &config)
-                    currentSection = nil
-                } else if currentSection == "thresholds" {
-                    if key == "warning", let val = Int(valueStr) {
-                        config.warningThreshold = val
-                    } else if key == "error", let val = Int(valueStr) {
-                        config.errorThreshold = val
-                    }
-                }
-            }
+            processLine(trimmed: trimmed, indent: indent, config: &config, state: &state)
         }
 
-        flushList()
+        state.flushList(to: &config)
         return config
+    }
+
+    private static func processLine(trimmed: String, indent: Int, config: inout Configuration, state: inout YAMLParserState) {
+        // List item
+        if trimmed.hasPrefix("- ") {
+            let value = String(trimmed.dropFirst(2)).trimmingCharacters(in: .whitespaces)
+                .trimmingCharacters(in: CharacterSet(charactersIn: "\"'"))
+            if state.currentList != nil {
+                state.currentList?.append(value)
+            }
+            return
+        }
+
+        // Key-value or section header
+        guard let colonIndex = trimmed.firstIndex(of: ":") else { return }
+        let key = String(trimmed[..<colonIndex]).trimmingCharacters(in: .whitespaces)
+        let valueStr = String(trimmed[trimmed.index(after: colonIndex)...]).trimmingCharacters(in: .whitespaces)
+
+        // If there's a pending list, flush it
+        if indent == 0 || (indent > 0 && !valueStr.isEmpty) {
+            state.flushList(to: &config)
+        }
+
+        applyKeyValue(key: key, valueStr: valueStr, indent: indent, config: &config, state: &state)
+    }
+
+    private static func applyKeyValue(key: String, valueStr: String, indent: Int, config: inout Configuration, state: inout YAMLParserState) {
+        if valueStr.isEmpty {
+            // Section header or list start
+            if indent == 0 {
+                state.currentSection = key
+                if ["exclude_paths", "include_paths", "swiftui_containers", "spm_package_paths"].contains(key) {
+                    state.currentList = []
+                    state.currentListKey = key
+                    state.currentSection = nil
+                }
+            } else if state.currentSection == "thresholds" {
+                // Shouldn't happen for thresholds, but handle gracefully
+            } else {
+                // Nested list under a section
+                state.currentList = []
+                state.currentListKey = key
+            }
+        } else {
+            // Scalar value
+            if indent == 0 {
+                applyScalar(key: key, value: valueStr, to: &config)
+                state.currentSection = nil
+            } else if state.currentSection == "thresholds" {
+                applyThresholdScalar(key: key, value: valueStr, to: &config)
+            }
+        }
+    }
+
+    private static func applyThresholdScalar(key: String, value: String, to config: inout Configuration) {
+        if key == "warning", let val = Int(value) {
+            config.warningThreshold = val
+        } else if key == "error", let val = Int(value) {
+            config.errorThreshold = val
+        }
     }
 
     private static func stripComment(_ line: String) -> String {

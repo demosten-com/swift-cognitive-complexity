@@ -39,30 +39,7 @@ public enum OutputFormat: String, Sendable, CaseIterable {
                 lines.append(currentFile)
             }
 
-            for fn in file.functions {
-                if violationsOnly && fn.complexity <= report.warningThreshold { continue }
-                if !violationsOnly && !verbose && fn.complexity == 0 { continue }
-
-                var line = "  \(fn.name)"
-                line += String(repeating: " ", count: max(1, 40 - fn.name.count))
-                line += "line \(fn.line)"
-                line += String(repeating: " ", count: max(1, 8 - String(fn.line).count))
-                line += "complexity: \(fn.complexity)"
-
-                if fn.complexity > report.errorThreshold {
-                    line += "  \u{274C} exceeds error threshold (\(report.errorThreshold))"
-                } else if fn.complexity > report.warningThreshold {
-                    line += "  \u{26A0}\u{FE0F} exceeds threshold (\(report.warningThreshold))"
-                }
-
-                lines.append(line)
-
-                if verbose {
-                    for detail in fn.details {
-                        lines.append("    line \(detail.line): \(detail.description)")
-                    }
-                }
-            }
+            lines += formatFileFunctions(file, report: report, verbose: verbose, violationsOnly: violationsOnly)
         }
 
         lines.append("")
@@ -79,6 +56,35 @@ public enum OutputFormat: String, Sendable, CaseIterable {
         lines.append(String(format: "Elapsed: %.2fs", report.elapsedSeconds))
 
         return lines.joined(separator: "\n")
+    }
+
+    private func formatFileFunctions(_ file: FileReport, report: ProjectReport, verbose: Bool, violationsOnly: Bool) -> [String] {
+        var lines: [String] = []
+        for fn in file.functions {
+            if violationsOnly && fn.complexity <= report.warningThreshold { continue }
+            if !violationsOnly && !verbose && fn.complexity == 0 { continue }
+
+            var line = "  \(fn.name)"
+            line += String(repeating: " ", count: max(1, 40 - fn.name.count))
+            line += "line \(fn.line)"
+            line += String(repeating: " ", count: max(1, 8 - String(fn.line).count))
+            line += "complexity: \(fn.complexity)"
+
+            if fn.complexity > report.errorThreshold {
+                line += "  \u{274C} exceeds error threshold (\(report.errorThreshold))"
+            } else if fn.complexity > report.warningThreshold {
+                line += "  \u{26A0}\u{FE0F} exceeds threshold (\(report.warningThreshold))"
+            }
+
+            lines.append(line)
+
+            if verbose {
+                for detail in fn.details {
+                    lines.append("    line \(detail.line): \(detail.description)")
+                }
+            }
+        }
+        return lines
     }
 
     // MARK: - JSON Format
@@ -229,15 +235,7 @@ public enum OutputFormat: String, Sendable, CaseIterable {
             for fd in file.functionDeltas {
                 var line = "  \(fd.name)"
                 line += String(repeating: " ", count: max(1, 40 - fd.name.count))
-
-                if let before = fd.beforeComplexity, let after = fd.afterComplexity {
-                    line += "\(before) -> \(after) (\(fd.delta >= 0 ? "+" : "")\(fd.delta))"
-                } else if fd.beforeComplexity == nil {
-                    line += "new (complexity: \(fd.afterComplexity ?? 0))"
-                } else {
-                    line += "deleted (was: \(fd.beforeComplexity ?? 0))"
-                }
-
+                line += formatFunctionDeltaSuffix(fd)
                 lines.append(line)
             }
         }
@@ -252,6 +250,16 @@ public enum OutputFormat: String, Sendable, CaseIterable {
         lines.append(String(format: "Elapsed: %.2fs", report.elapsedSeconds))
 
         return lines.joined(separator: "\n")
+    }
+
+    private func formatFunctionDeltaSuffix(_ fd: FunctionDelta) -> String {
+        if let before = fd.beforeComplexity, let after = fd.afterComplexity {
+            return "\(before) -> \(after) (\(fd.delta >= 0 ? "+" : "")\(fd.delta))"
+        } else if fd.beforeComplexity == nil {
+            return "new (complexity: \(fd.afterComplexity ?? 0))"
+        } else {
+            return "deleted (was: \(fd.beforeComplexity ?? 0))"
+        }
     }
 
     private func formatDiffJSON(_ report: DiffReport) -> String {
@@ -316,49 +324,66 @@ public enum OutputFormat: String, Sendable, CaseIterable {
         lines.append("**Overall delta: \(sign)\(report.totalDelta)**")
         lines.append("")
 
-        if !report.newViolations.isEmpty {
-            lines.append("### New violations (\(report.newViolations.count))")
-            lines.append("")
-            lines.append("| File | Function | Complexity | Threshold |")
-            lines.append("|------|----------|------------|-----------|")
-            for fn in report.newViolations {
-                let fileName = (fn.filePath as NSString).lastPathComponent
-                let threshold = fn.complexity > report.errorThreshold ? "\(report.errorThreshold) :x:" : "\(report.warningThreshold) :warning:"
-                lines.append("| `\(fileName)` | `\(fn.name)` | \(fn.complexity) | \(threshold) |")
-            }
-            lines.append("")
-        }
-
-        if !report.resolvedViolations.isEmpty {
-            lines.append("### Resolved violations (\(report.resolvedViolations.count))")
-            lines.append("")
-            lines.append("| File | Function | Before | After |")
-            lines.append("|------|----------|--------|-------|")
-            for fn in report.resolvedViolations {
-                let fileName = (fn.filePath as NSString).lastPathComponent
-                lines.append("| `\(fileName)` | `\(fn.name)` | \(fn.complexity) | :white_check_mark: |")
-            }
-            lines.append("")
-        }
-
-        let allDeltas = report.changedFiles.flatMap { $0.functionDeltas }.filter { $0.delta != 0 }
-        if !allDeltas.isEmpty {
-            lines.append("### Changed functions")
-            lines.append("")
-            lines.append("| File | Function | Before | After | Delta |")
-            lines.append("|------|----------|--------|-------|-------|")
-            for file in report.changedFiles {
-                let fileName = (file.path as NSString).lastPathComponent
-                for fd in file.functionDeltas where fd.delta != 0 {
-                    let before = fd.beforeComplexity.map(String.init) ?? "--"
-                    let after = fd.afterComplexity.map(String.init) ?? "--"
-                    let deltaStr = fd.beforeComplexity == nil ? "new" : (fd.afterComplexity == nil ? "deleted" : "\(fd.delta >= 0 ? "+" : "")\(fd.delta)")
-                    lines.append("| `\(fileName)` | `\(fd.name)` | \(before) | \(after) | \(deltaStr) |")
-                }
-            }
-        }
+        lines += formatNewViolationsMarkdown(report)
+        lines += formatResolvedViolationsMarkdown(report)
+        lines += formatChangedFunctionsMarkdown(report)
 
         return lines.joined(separator: "\n")
+    }
+
+    private func formatNewViolationsMarkdown(_ report: DiffReport) -> [String] {
+        guard !report.newViolations.isEmpty else { return [] }
+        var lines: [String] = []
+        lines.append("### New violations (\(report.newViolations.count))")
+        lines.append("")
+        lines.append("| File | Function | Complexity | Threshold |")
+        lines.append("|------|----------|------------|-----------|")
+        for fn in report.newViolations {
+            let fileName = (fn.filePath as NSString).lastPathComponent
+            let threshold = fn.complexity > report.errorThreshold ? "\(report.errorThreshold) :x:" : "\(report.warningThreshold) :warning:"
+            lines.append("| `\(fileName)` | `\(fn.name)` | \(fn.complexity) | \(threshold) |")
+        }
+        lines.append("")
+        return lines
+    }
+
+    private func formatResolvedViolationsMarkdown(_ report: DiffReport) -> [String] {
+        guard !report.resolvedViolations.isEmpty else { return [] }
+        var lines: [String] = []
+        lines.append("### Resolved violations (\(report.resolvedViolations.count))")
+        lines.append("")
+        lines.append("| File | Function | Before | After |")
+        lines.append("|------|----------|--------|-------|")
+        for fn in report.resolvedViolations {
+            let fileName = (fn.filePath as NSString).lastPathComponent
+            lines.append("| `\(fileName)` | `\(fn.name)` | \(fn.complexity) | :white_check_mark: |")
+        }
+        lines.append("")
+        return lines
+    }
+
+    private func formatChangedFunctionsMarkdown(_ report: DiffReport) -> [String] {
+        let hasChanges = report.changedFiles.contains { $0.functionDeltas.contains { $0.delta != 0 } }
+        guard hasChanges else { return [] }
+        var lines: [String] = []
+        lines.append("### Changed functions")
+        lines.append("")
+        lines.append("| File | Function | Before | After | Delta |")
+        lines.append("|------|----------|--------|-------|-------|")
+        for file in report.changedFiles {
+            let fileName = (file.path as NSString).lastPathComponent
+            for fd in file.functionDeltas where fd.delta != 0 {
+                lines.append(formatFunctionDeltaRow(fileName: fileName, fd))
+            }
+        }
+        return lines
+    }
+
+    private func formatFunctionDeltaRow(fileName: String, _ fd: FunctionDelta) -> String {
+        let before = fd.beforeComplexity.map(String.init) ?? "--"
+        let after = fd.afterComplexity.map(String.init) ?? "--"
+        let deltaStr = fd.beforeComplexity == nil ? "new" : (fd.afterComplexity == nil ? "deleted" : "\(fd.delta >= 0 ? "+" : "")\(fd.delta)")
+        return "| `\(fileName)` | `\(fd.name)` | \(before) | \(after) | \(deltaStr) |"
     }
 
     // MARK: - Helpers

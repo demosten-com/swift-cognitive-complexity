@@ -18,11 +18,11 @@ public struct ProjectAnalyzer: Sendable {
         )
         let files = try discovery.discoverFiles(in: paths)
         let basePath = resolveBasePath(for: paths)
-        let start = CFAbsoluteTimeGetCurrent()
+        let start = Date().timeIntervalSinceReferenceDate
 
         let reports = await analyzeFilesConcurrently(files, basePath: basePath)
 
-        let elapsed = CFAbsoluteTimeGetCurrent() - start
+        let elapsed = Date().timeIntervalSinceReferenceDate - start
         return ProjectReport(
             files: reports.sorted { $0.path < $1.path },
             warningThreshold: configuration.warningThreshold,
@@ -64,14 +64,14 @@ public struct ProjectAnalyzer: Sendable {
             if let attrs = try? FileManager.default.attributesOfItem(atPath: path),
                let fileSize = attrs[.size] as? Int,
                fileSize > configuration.maxFileSize {
-                fputs("Warning: Skipping '\(path)' (\(fileSize) bytes exceeds max-file-size \(configuration.maxFileSize))\n", stderr)
+                FileHandle.standardError.write(Data("Warning: Skipping '\(path)' (\(fileSize) bytes exceeds max-file-size \(configuration.maxFileSize))\n".utf8))
                 return nil
             }
             let source = try String(contentsOfFile: path, encoding: .utf8)
             let displayPath = basePath.map { makeRelativePath(path, basePath: $0) } ?? path
             return analyzeSource(source, filePath: displayPath)
         } catch {
-            fputs("Warning: Failed to analyze '\(path)': \(error)\n", stderr)
+            FileHandle.standardError.write(Data("Warning: Failed to analyze '\(path)': \(error)\n".utf8))
             return nil
         }
     }

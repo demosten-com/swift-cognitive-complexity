@@ -12,7 +12,7 @@ public struct DiffAnalyzer<G: GitOperations>: Sendable {
     }
 
     public func analyze(baseRef: String, changedFiles: [String]? = nil) async throws -> DiffReport {
-        let start = CFAbsoluteTimeGetCurrent()
+        let start = Date().timeIntervalSinceReferenceDate
 
         let repoRoot = try gitOperations.repositoryRoot()
         let relativePaths: [String]
@@ -33,26 +33,9 @@ public struct DiffAnalyzer<G: GitOperations>: Sendable {
         var resolvedViolations: [FunctionComplexity] = []
 
         for relativePath in filtered {
-            let absolutePath = repoRoot.hasSuffix("/")
-                ? repoRoot + relativePath
-                : repoRoot + "/" + relativePath
-
-            let afterFunctions: [FunctionComplexity]
-            if let afterSource = try? String(contentsOfFile: absolutePath, encoding: .utf8) {
-                let afterReport = analyzer.analyzeSource(afterSource, filePath: relativePath)
-                afterFunctions = afterReport.functions
-            } else {
-                afterFunctions = []
-            }
-
-            let baseSource = try gitOperations.fileContent(at: relativePath, ref: baseRef)
-            let beforeFunctions: [FunctionComplexity]
-            if let baseSource {
-                let baseReport = analyzer.analyzeSource(baseSource, filePath: relativePath)
-                beforeFunctions = baseReport.functions
-            } else {
-                beforeFunctions = []
-            }
+            let (beforeFunctions, afterFunctions) = try analyzeFileComplexity(
+                relativePath: relativePath, baseRef: baseRef, repoRoot: repoRoot
+            )
 
             let functionDeltas = computeFunctionDeltas(
                 before: beforeFunctions,
@@ -70,25 +53,12 @@ public struct DiffAnalyzer<G: GitOperations>: Sendable {
                 functionDeltas: functionDeltas
             ))
 
-            // Detect new violations: after > threshold AND (before didn't exist OR before <= threshold)
-            for afterFn in afterFunctions where afterFn.complexity > configuration.warningThreshold {
-                let beforeFn = beforeFunctions.first { $0.name == afterFn.name }
-                if beforeFn == nil || beforeFn!.complexity <= configuration.warningThreshold {
-                    newViolations.append(afterFn)
-                }
-            }
-
-            // Detect resolved violations: before > threshold AND (after doesn't exist OR after <= threshold)
-            for beforeFn in beforeFunctions where beforeFn.complexity > configuration.warningThreshold {
-                let afterFn = afterFunctions.first { $0.name == beforeFn.name }
-                if afterFn == nil || afterFn!.complexity <= configuration.warningThreshold {
-                    resolvedViolations.append(beforeFn)
-                }
-            }
+            newViolations += detectNewViolations(before: beforeFunctions, after: afterFunctions, threshold: configuration.warningThreshold)
+            resolvedViolations += detectResolvedViolations(before: beforeFunctions, after: afterFunctions, threshold: configuration.warningThreshold)
         }
 
         let totalDelta = fileDiffs.reduce(0) { $0 + $1.delta }
-        let elapsed = CFAbsoluteTimeGetCurrent() - start
+        let elapsed = Date().timeIntervalSinceReferenceDate - start
 
         return DiffReport(
             changedFiles: fileDiffs.sorted { $0.path < $1.path },
@@ -99,6 +69,57 @@ public struct DiffAnalyzer<G: GitOperations>: Sendable {
             resolvedViolations: resolvedViolations,
             elapsedSeconds: elapsed
         )
+    }
+
+    private func analyzeFileComplexity(
+        relativePath: String, baseRef: String, repoRoot: String
+    ) throws -> (before: [FunctionComplexity], after: [FunctionComplexity]) {
+        let absolutePath = repoRoot.hasSuffix("/")
+            ? repoRoot + relativePath
+            : repoRoot + "/" + relativePath
+
+        let afterFunctions: [FunctionComplexity]
+        if let afterSource = try? String(contentsOfFile: absolutePath, encoding: .utf8) {
+            afterFunctions = analyzer.analyzeSource(afterSource, filePath: relativePath).functions
+        } else {
+            afterFunctions = []
+        }
+
+        let baseSource = try gitOperations.fileContent(at: relativePath, ref: baseRef)
+        let beforeFunctions: [FunctionComplexity]
+        if let baseSource {
+            beforeFunctions = analyzer.analyzeSource(baseSource, filePath: relativePath).functions
+        } else {
+            beforeFunctions = []
+        }
+
+        return (before: beforeFunctions, after: afterFunctions)
+    }
+
+    private func detectNewViolations(
+        before: [FunctionComplexity], after: [FunctionComplexity], threshold: Int
+    ) -> [FunctionComplexity] {
+        var violations: [FunctionComplexity] = []
+        for afterFn in after where afterFn.complexity > threshold {
+            let beforeFn = before.first { $0.name == afterFn.name }
+            if beforeFn == nil || beforeFn!.complexity <= threshold {
+                violations.append(afterFn)
+            }
+        }
+        return violations
+    }
+
+    private func detectResolvedViolations(
+        before: [FunctionComplexity], after: [FunctionComplexity], threshold: Int
+    ) -> [FunctionComplexity] {
+        var violations: [FunctionComplexity] = []
+        for beforeFn in before where beforeFn.complexity > threshold {
+            let afterFn = after.first { $0.name == beforeFn.name }
+            if afterFn == nil || afterFn!.complexity <= threshold {
+                violations.append(beforeFn)
+            }
+        }
+        return violations
     }
 
     private func computeFunctionDeltas(

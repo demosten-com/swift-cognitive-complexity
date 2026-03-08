@@ -39,26 +39,26 @@ public struct FileDiscovery: Sendable {
                 continue
             }
 
-            guard let enumerator = fm.enumerator(atPath: normalized) else {
-                throw FileDiscoveryError.cannotEnumerate(root)
-            }
-
-            while let relativePath = enumerator.nextObject() as? String {
-                let fullPath = normalized + "/" + relativePath
-
-                // Skip always-excluded directories early
-                if Self.alwaysExcluded.contains(where: { relativePath.contains($0) }) {
-                    continue
-                }
-
-                guard relativePath.hasSuffix(".swift") else { continue }
-                guard shouldInclude(path: relativePath) else { continue }
-
-                result.append(fullPath)
-            }
+            try discoverFilesInDirectory(normalized, root: root, into: &result)
         }
 
         return result.sorted()
+    }
+
+    private func discoverFilesInDirectory(_ normalized: String, root: String, into result: inout [String]) throws {
+        guard let enumerator = FileManager.default.enumerator(atPath: normalized) else {
+            throw FileDiscoveryError.cannotEnumerate(root)
+        }
+
+        while let relativePath = enumerator.nextObject() as? String {
+            if Self.alwaysExcluded.contains(where: { relativePath.contains($0) }) {
+                continue
+            }
+            guard relativePath.hasSuffix(".swift") else { continue }
+            guard shouldInclude(path: relativePath) else { continue }
+
+            result.append(normalized + "/" + relativePath)
+        }
     }
 
     public func shouldInclude(path: String) -> Bool {
@@ -117,52 +117,52 @@ public struct FileDiscovery: Sendable {
 
         // Empty segment means ** was at start/end or adjacent to another **
         if segment.isEmpty {
-            // Skip this segment, ** matches zero or more components
             return matchSegments(segments, against: pathComponents, segIndex: segIndex + 1, pathIndex: pathIndex)
         }
 
-        // The segment may contain multiple path components (e.g., "a/b" from "a/**/b/c")
         let segParts = segment.split(separator: "/", omittingEmptySubsequences: true).map(String.init)
-
-        // Try matching segParts starting at each possible pathIndex
         let isLast = segIndex == segments.count - 1
         let maxStart = pathComponents.count - segParts.count
 
         for start in pathIndex...max(pathIndex, maxStart) {
             if start + segParts.count > pathComponents.count { break }
 
-            var allMatch = true
-            for (i, segPart) in segParts.enumerated() {
-                if fnmatch(segPart, pathComponents[start + i], 0) != 0 {
-                    allMatch = false
-                    break
-                }
-            }
-
-            if allMatch {
+            if allSegmentPartsMatch(segParts, at: start, in: pathComponents) {
                 let nextPathIndex = start + segParts.count
-                if isLast {
-                    // Last segment: if pattern ended with /**, any remaining path is ok
-                    // If not, all path components must be consumed
-                    if segIndex == segments.count - 1 && segments.last == "" {
-                        return true
-                    }
-                    // Check if there are more segments (empty trailing from **)
-                    if nextPathIndex == pathComponents.count {
-                        return true
-                    }
-                    // There might be a trailing empty segment
-                    if segIndex + 1 < segments.count {
-                        return matchSegments(segments, against: pathComponents, segIndex: segIndex + 1, pathIndex: nextPathIndex)
-                    }
-                } else {
-                    if matchSegments(segments, against: pathComponents, segIndex: segIndex + 1, pathIndex: nextPathIndex) {
-                        return true
-                    }
+                if handleSegmentMatch(segments, against: pathComponents, segIndex: segIndex, nextPathIndex: nextPathIndex, isLast: isLast) {
+                    return true
                 }
             }
         }
 
+        return false
+    }
+
+    private static func allSegmentPartsMatch(_ segParts: [String], at startIndex: Int, in pathComponents: [String]) -> Bool {
+        for (i, segPart) in segParts.enumerated() {
+            if fnmatch(segPart, pathComponents[startIndex + i], 0) != 0 {
+                return false
+            }
+        }
+        return true
+    }
+
+    private static func handleSegmentMatch(_ segments: [String], against pathComponents: [String], segIndex: Int, nextPathIndex: Int, isLast: Bool) -> Bool {
+        if isLast {
+            if segIndex == segments.count - 1 && segments.last == "" {
+                return true
+            }
+            if nextPathIndex == pathComponents.count {
+                return true
+            }
+            if segIndex + 1 < segments.count {
+                return matchSegments(segments, against: pathComponents, segIndex: segIndex + 1, pathIndex: nextPathIndex)
+            }
+        } else {
+            if matchSegments(segments, against: pathComponents, segIndex: segIndex + 1, pathIndex: nextPathIndex) {
+                return true
+            }
+        }
         return false
     }
 }
