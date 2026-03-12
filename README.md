@@ -87,6 +87,12 @@ Use `--violations-only` to show only functions that exceed the warning or error 
 | 1 | Functions above error threshold (or `--fail-on-increase` triggered) |
 | 2 | Tool error (invalid arguments, parse failure) |
 
+## Attribution
+
+This tool implements the cognitive complexity metric as described by G. Ann Campbell in the [SonarSource white paper](https://www.sonarsource.com/docs/CognitiveComplexity.pdf) (v1.7, 2023) and the [ACM conference paper](https://dl.acm.org/doi/10.1145/3194164.3194186).
+
+This is an independent project, not affiliated with or endorsed by SonarSource.
+
 ## License
 
 [MIT](LICENSE)
