@@ -5,7 +5,7 @@ A command-line tool that calculates [cognitive complexity](https://www.sonarsour
 ## Quick Start
 
 ```bash
-# Build from source (requires Swift 6.2+)
+# Build from source (requires Swift 6.0+, macOS or Linux)
 swift build -c release
 
 # Analyze a file or project

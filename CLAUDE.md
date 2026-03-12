@@ -18,11 +18,11 @@ swift run scc analyze <path>   # Analyze files (default subcommand)
 swift run scc diff --base-ref origin/main  # Diff analysis against a git ref
 ```
 
-Binary name: `scc` (current version: 0.2.0, defined in `Sources/SCCLib/Version.swift`)
+Binary name: `scc` (version defined in `Sources/SCCLib/Version.swift`)
 
 ## Technology Stack
 
-- **Swift 6.2** with SwiftPM (swift-tools-version: 6.2)
+- **Swift 6.0** with SwiftPM (swift-tools-version: 6.0)
 - **SwiftSyntax 600.0.1+** — AST parsing (pure-Swift parser, no compiler dependency)
 - **swift-argument-parser 1.3.0+** — CLI framework
 - **Hand-rolled YAML parser** — no external YAML dependency (see `Configuration.parse(yaml:)`)
@@ -93,7 +93,7 @@ Based on the SonarSource Cognitive Complexity white paper (v1.7):
 | `repeat-while` | `RepeatStmtSyntax` |
 | `guard` | `GuardStmtSyntax` |
 | `catch` | `CatchClauseSyntax` (each `catch` is +1; `do` and `try` do NOT increment) |
-| ternary `? :` | `TernaryExprSyntax` |
+| ternary `? :` | `UnresolvedTernaryExprSyntax` |
 | `#if` | conditional compilation — counts like `if` |
 
 ### Hybrid increments (+1 only, no nesting penalty, but increase nesting for children)
@@ -105,12 +105,13 @@ Based on the SonarSource Cognitive Complexity white paper (v1.7):
 
 ### Fundamental increments (+1 only)
 - Labeled `break`/`continue` — `BreakStmtSyntax`/`ContinueStmtSyntax` where `.label` is non-nil
-- Logical operator sequence switches: `&&`/`||` via `InfixOperatorExprSyntax` — same operator sequence gets +1 total, each switch between operators gets +1 (e.g., `a && b && c || d` = +2)
+- Logical operator sequence switches: `&&`/`||` via `BinaryOperatorExprSyntax` in `SequenceExprSyntax` — same operator sequence gets +1 total, each switch between operators gets +1 (e.g., `a && b && c || d` = +2)
 - Direct recursion: `FunctionCallExprSyntax` calling the enclosing function name
 
 ### Nesting incrementors (increase nesting, no +1)
 - Closures (`ClosureExprSyntax`)
 - Nested function declarations (`FunctionDeclSyntax` inside another function)
+- Nested initializer declarations (`InitializerDeclSyntax` inside another function)
 
 ### No increment
 `try`, `defer`, `return`, plain `break`/`continue`, `??` (nil-coalescing), `async let`, `@autoclosure`, `switch` `where` clauses (part of the case, switch already counted)
@@ -127,9 +128,9 @@ When enabled (`--swiftui-aware` or `swiftui_aware: true` in config):
 **SwiftUI test fixture expected scores** (`Tests/Fixtures/swiftui_view.swift`):
 - `if items.isEmpty` → +1 (if)
 - `else` → +1 (else)
-- `ForEach(items)` → +1 (loop)
-- `if item.isUrgent` → +2 (if + nesting=1 from ForEach)
-- **Total: 5** (with SwiftUI-aware mode)
+- `ForEach(items)` → +2 (ForEach + nesting=1 from if)
+- `if item.isUrgent` → +3 (if + nesting=2 from if+ForEach)
+- **Total: 7** (with SwiftUI-aware mode)
 
 ## Key Data Types
 
@@ -162,7 +163,7 @@ The tool reads `.cognitive-complexity.yml` at project root. Key settings:
 | `thresholds.warning` | 15 | Per-function warning threshold |
 | `thresholds.error` | 25 | Per-function error threshold (triggers exit 1) |
 | `swiftui_aware` | false | Suppress nesting for layout containers |
-| `swiftui_containers` | VStack, HStack, ZStack, ... (16 total) | Container names for SwiftUI mode |
+| `swiftui_containers` | VStack, HStack, ZStack, ... (19 total) | Container names for SwiftUI mode |
 | `exclude_paths` | `**/Generated/**`, `**/Mocks/**`, `**/*.generated.swift`, `.build/**` | Glob patterns to exclude |
 | `include_paths` | [] (all) | Glob patterns to include |
 | `max_file_size` | 512000 | Skip files larger than this (bytes) |
