@@ -2,6 +2,14 @@
 
 A command-line tool that calculates [cognitive complexity](https://www.sonarsource.com/docs/CognitiveComplexity.pdf) scores for Swift and SwiftUI source files. Use it locally or as a GitHub Actions PR quality gate.
 
+## What is Cognitive Complexity?
+
+You've probably heard of cyclomatic complexity — it counts the number of independent paths through your code. It's useful for testing but it has a big problem: it doesn't reflect how hard the code is to *understand*. A `switch` with 10 cases gets a similar cyclomatic score as a deeply nested loop with conditionals — yet the nested loop is clearly harder to read.
+
+Cognitive complexity fixes this. It was created by G. Ann Campbell at SonarSource and it measures how difficult a piece of code is for a human to understand. The key idea is simple — nesting is penalized. An `if` inside a `for` inside another `if` costs more than three flat `if` statements. At the same time, things like `switch` (as a whole) or nil-coalescing (`??`) are treated as easy to read and are scored lightly or not at all.
+
+Why should you care? Because we spend most of our time reading code, not writing it. High cognitive complexity means more bugs, slower code reviews, and harder onboarding. Keeping it low makes your codebase healthier.
+
 ## Quick Start
 
 ```bash
