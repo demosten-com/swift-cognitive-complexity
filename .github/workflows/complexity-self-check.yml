@@ -1,0 +1,88 @@
+name: Complexity Self-Check
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  analyze:
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Swift
+        uses: swift-actions/setup-swift@v2
+        with:
+          swift-version: '6.0'
+
+      - name: Build
+        run: swift build
+
+      - name: Run complexity analysis
+        run: swift run scc analyze Sources/
+
+  diff:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Swift
+        uses: swift-actions/setup-swift@v2
+        with:
+          swift-version: '6.0'
+
+      - name: Build
+        run: swift build
+
+      - name: Detect changed Swift files
+        id: changed
+        uses: tj-actions/changed-files@v45
+        with:
+          files: '**/*.swift'
+
+      - name: Run complexity analysis (annotations)
+        if: steps.changed.outputs.any_changed == 'true'
+        run: |
+          echo "${{ steps.changed.outputs.all_changed_files }}" | tr ' ' '\n' > /tmp/changed-files.txt
+          swift run scc diff \
+            --base-ref "origin/${{ github.event.pull_request.base.ref }}" \
+            --changed-files /tmp/changed-files.txt \
+            --format github \
+          || echo "scc_exit_code=$?" >> "$GITHUB_ENV"
+
+      - name: Generate PR comment
+        if: steps.changed.outputs.any_changed == 'true'
+        run: |
+          echo "${{ steps.changed.outputs.all_changed_files }}" | tr ' ' '\n' > /tmp/changed-files.txt
+          swift run scc diff \
+            --base-ref "origin/${{ github.event.pull_request.base.ref }}" \
+            --changed-files /tmp/changed-files.txt \
+            --format markdown \
+          > /tmp/complexity-report.md || true
+
+      - name: Generate empty report
+        if: steps.changed.outputs.any_changed != 'true'
+        run: echo "No Swift files changed in this PR." > /tmp/complexity-report.md
+
+      - name: Post PR comment
+        if: always()
+        uses: marocchino/sticky-pull-request-comment@v2
+        with:
+          path: /tmp/complexity-report.md
+
+      - name: Apply exit code
+        if: env.scc_exit_code != '' && env.scc_exit_code != '0'
+        run: exit ${{ env.scc_exit_code }}
