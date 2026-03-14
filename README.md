@@ -8,7 +8,7 @@ You've probably heard of cyclomatic complexity — it counts the number of indep
 
 Cognitive complexity fixes this. It was created by G. Ann Campbell at SonarSource and it measures how difficult a piece of code is for a human to understand. The key idea is simple — nesting is penalized. An `if` inside a `for` inside another `if` costs more than three flat `if` statements. At the same time, things like `switch` (as a whole) or nil-coalescing (`??`) are treated as easy to read and are scored lightly or not at all.
 
-Why should you care? Because we spend most of our time reading code, not writing it. High cognitive complexity means more bugs, slower code reviews, and harder onboarding. Keeping it low makes your codebase healthier.
+Why should you care? Because we spend most of our time reading code, not writing it. High cognitive complexity means more bugs, slower code reviews, and harder onboarding. Keeping it low makes your codebase healthier. And in the age of AI coding agents — they also struggle more with deeply nested, complex control flow. Lower cognitive complexity likely means better results from your AI tools too.
 
 ## Quick Start
 
