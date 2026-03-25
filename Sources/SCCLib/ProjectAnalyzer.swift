@@ -19,13 +19,13 @@ public struct ProjectAnalyzer: Sendable {
     }
 
     public func analyze(paths: [String]) async throws -> ProjectReport {
+        let start = Date().timeIntervalSinceReferenceDate
         let discovery = FileDiscovery(
             includePaths: configuration.includePaths,
             excludePaths: configuration.excludePaths
         )
         let files = try discovery.discoverFiles(in: paths)
         let basePath = resolveBasePath(for: paths)
-        let start = Date().timeIntervalSinceReferenceDate
 
         let reports = await analyzeFilesConcurrently(files, basePath: basePath)
 

@@ -5,4 +5,4 @@
 // Licensed under the MIT License. See LICENSE file for details.
 // SPDX-License-Identifier: MIT
 //
-public let sccVersion = "0.2.2"
+public let sccVersion = "0.2.4"
